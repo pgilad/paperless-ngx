@@ -151,6 +151,7 @@ pnpm ng build --configuration production
   configuration. This is not ideal. But for now, make sure no settings
   except for DEBUG are overridden when testing.
 - Tests run in a random order each session, so that one test cannot quietly depend on another having run first. The seed is printed at the top of the run; pass `--randomly-seed=<seed>` to replay that exact order, or `--randomly-seed=last` to repeat the previous run.
+- The PostgreSQL smoke tests run migrations and check document queries and permissions on PostgreSQL 18 and 19. PostgreSQL 19 coverage is experimental while the pinned Psycopg release lists server support through PostgreSQL 18. [Psycopg support](https://github.com/psycopg/psycopg/blob/3.3.4/docs/basic/install.rst#supported-systems)
 
 !!! note
 

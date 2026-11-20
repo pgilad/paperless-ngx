@@ -153,6 +153,66 @@ jobs:
         run: |
           docker compose --file docker/compose/docker-compose.ci-test.yml logs
           docker compose --file docker/compose/docker-compose.ci-test.yml down
+  test_postgresql:
+    needs: changes
+    if: needs.changes.outputs.backend_changed == 'true'
+    name: "PostgreSQL ${{ matrix.postgresql-version }} smoke tests"
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql-version: [18, 19]
+    env:
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBHOST: 127.0.0.1
+    services:
+      postgres:
+        image: docker.io/library/postgres:${{ matrix.postgresql-version }}-trixie
+        env:
+          POSTGRES_DB: paperless
+          POSTGRES_USER: paperless
+          POSTGRES_PASSWORD: paperless
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd="pg_isready -h 127.0.0.1 -U paperless -d paperless" --health-interval=5s --health-timeout=5s --health-retries=12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.DEFAULT_UV_VERSION }}
+          enable-cache: true
+          python-version: ${{ steps.setup-python.outputs.python-version }}
+      - name: Install system dependencies
+        timeout-minutes: 12
+        uses: $/.github/actions/apt-install
+        with:
+          packages: libpq5 unpaper tesseract-ocr ghostscript poppler-utils qpdf
+      - name: Run PostgreSQL smoke tests
+        working-directory: src
+        env:
+          PYTHON_VERSION: ${{ steps.setup-python.outputs.python-version }}
+        run: |
+          uv run --python "${PYTHON_VERSION}" --group testing --extra postgres --frozen \
+            pytest --no-cov -n 0 \
+            documents/tests/test_models.py \
+            documents/tests/test_migration_sha256_checksums.py \
+            documents/tests/test_migration_saved_view_visibility.py \
+            documents/tests/test_migration_share_link_bundle.py \
+            documents/tests/test_api_documents.py::TestDocumentApi::test_document_fields \
+            documents/tests/test_api_documents.py::TestDocumentApi::test_document_filters \
+            documents/tests/test_api_documents.py::TestDocumentApi::test_document_permissions_filters
   typing:
     needs: changes
     if: needs.changes.outputs.backend_changed == 'true'
@@ -215,7 +275,7 @@ jobs:
             src/ | uv run mypy-baseline filter
   gate:
     name: Backend CI Gate
-    needs: [changes, test, typing]
+    needs: [changes, test, test_postgresql, typing]
     if: always()
     runs-on: ubuntu-slim
     steps:
@@ -223,6 +283,7 @@ jobs:
         env:
           BACKEND_CHANGED: ${{ needs.changes.outputs.backend_changed }}
           TEST_RESULT: ${{ needs.test.result }}
+          POSTGRESQL_TEST_RESULT: ${{ needs.test_postgresql.result }}
           TYPING_RESULT: ${{ needs.typing.result }}
         run: |
           if [[ "${BACKEND_CHANGED}" != "true" ]]; then
@@ -232,6 +293,11 @@ jobs:
 
           if [[ "${TEST_RESULT}" != "success" ]]; then
             echo "::error::Backend test job result: ${TEST_RESULT}"
+            exit 1
+          fi
+
+          if [[ "${POSTGRESQL_TEST_RESULT}" != "success" ]]; then
+            echo "::error::PostgreSQL smoke test job result: ${POSTGRESQL_TEST_RESULT}"
             exit 1
           fi
 
